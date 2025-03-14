@@ -8,6 +8,6 @@ beautifulsoup4
 regex
 langdetect
 tensorflow>=2.16.1
-tensorflow-datasets>=4.9.2
+tensorflow-datasets>=4.9.3,<5.0.0
 protobuf>=3.20.3
 git-lfs
