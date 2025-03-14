@@ -1,10 +1,9 @@
 import streamlit as st
 import tensorflow as tf
-import numpy as np
-import sentencepiece as spm
+import tensorflow_datasets as tfds
 import os
 
-# ========== PAGE CONFIG ==========
+# Streamlit Page Config
 st.set_page_config(
     page_title="TarjumanAI - Arabic to English Translator",
     page_icon="🌐➡️📝",
@@ -12,12 +11,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ========== CUSTOM CSS ==========
+# ========== Custom CSS for Dark Mode ==========
 st.markdown("""
     <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    #MainMenu, footer, header {visibility: hidden;}
 
     .stApp {
         background: linear-gradient(to bottom right, #1A1A1D, #0D0D0D);
@@ -31,25 +28,27 @@ st.markdown("""
         font-size: 3rem;
     }
 
-    textarea {
-        background-color: #262730 !important;
-        color: #F0EAD6 !important;
-        border: 1px solid #4facfe !important;
-        border-radius: 8px !important;
-        font-size: 1rem !important;
+    h3 {
+        color: #D4AF37 !important;
+        text-align: center;
+    }
+
+    .stTextArea textarea {
+        background-color: #262730;
+        color: #F0EAD6;
+        border: 1px solid #4facfe;
+        border-radius: 10px;
+        font-size: 1rem;
     }
 
     .stButton > button {
         background: linear-gradient(90deg, #4facfe, #00f2fe);
         color: #0D0D0D;
-        border: none;
-        border-radius: 8px;
-        padding: 0.75rem 1.5rem;
-        font-size: 1.1rem;
         font-weight: bold;
-        cursor: pointer;
+        font-size: 1.1rem;
+        border-radius: 10px;
+        padding: 0.75rem 1.5rem;
         transition: all 0.3s ease;
-        width: 100%;
     }
 
     .stButton > button:hover {
@@ -71,7 +70,6 @@ st.markdown("""
         position: absolute;
         top: -30px;
         right: 0;
-        transform: translateX(0%);
         background-color: #333;
         color: #fff;
         padding: 5px 10px;
@@ -88,74 +86,95 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ========== LOAD TOKENIZERS ==========
+# ========== Tokenizer & Model Loading ==========
 @st.cache_resource
-def load_tokenizers():
-    source_tokenizer = spm.SentencePieceProcessor()
-    target_tokenizer = spm.SentencePieceProcessor()
+def load_tokenizer(filename):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file(
+        os.path.join(current_dir, filename)
+    )
+    return tokenizer
 
-    source_tokenizer.load('source_tokenizer.subword.subwords')
-    target_tokenizer.load('target_tokenizer.subword.subwords')
-
-    return source_tokenizer, target_tokenizer
-
-# ========== LOAD MODEL ==========
 @st.cache_resource
-def load_model():
-    model = tf.keras.models.load_model('arabic_to_english_transformer_weights.weights.h5')
-    return model
+def load_model(source_vocab_size, target_vocab_size):
+    transformer = Transformer(
+        vocab_size_enc=source_vocab_size + 2,
+        vocab_size_dec=target_vocab_size + 2,
+        d_model=512,
+        n_layers=4,
+        ffn_units=512,
+        num_heads=8,
+        dropout_rate=0.1
+    )
+    dummy_enc_input = tf.ones((1, 15), dtype=tf.int32)
+    dummy_dec_input = tf.ones((1, 15), dtype=tf.int32)
+    transformer(dummy_enc_input, dummy_dec_input, training=False)
 
-# ========== EVALUATION FUNCTION ==========
-def evaluate(sentence, model, source_tokenizer, target_tokenizer, max_length=40):
-    # Encode input sentence
-    sentence = sentence.lower().strip()
-    sentence_ids = source_tokenizer.encode(sentence)
-    encoder_input = tf.expand_dims(sentence_ids, 0)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_dir, "model_files", "arabic_to_english_transformer_weights.weights.h5")
+    transformer.load_weights(model_path)
+    return transformer
 
-    # Prepare decoder input with <start> token
-    start_token = target_tokenizer.bos_id()
-    end_token = target_tokenizer.eos_id()
+# ========== Import Model Classes ==========
+# Note: Skipping class definitions here since they remain unchanged.
+# You can keep your Transformer, Encoder, Decoder, etc. classes as they are.
 
-    decoder_input = [start_token]
-    output = tf.expand_dims(decoder_input, 0)
+# Load Tokenizers & Model
+source_tokenizer_path = os.path.join("model_files", "source_tokenizer.subword")
+target_tokenizer_path = os.path.join("model_files", "target_tokenizer.subword")
 
-    for i in range(max_length):
-        predictions = model([encoder_input, output])
-        predictions = predictions[:, -1:, :]
-        predicted_id = tf.argmax(predictions, axis=-1).numpy()[0][0]
+source_tokenizer = load_tokenizer(source_tokenizer_path)
+target_tokenizer = load_tokenizer(target_tokenizer_path)
 
-        if predicted_id == end_token:
-            break
+model = load_model(source_tokenizer.vocab_size, target_tokenizer.vocab_size)
 
-        output = tf.concat([output, [[predicted_id]]], axis=-1)
+# Start and End Tokens
+num_words_inputs = source_tokenizer.vocab_size + 2
+num_words_output = target_tokenizer.vocab_size + 2
+start_token_source = [num_words_inputs - 2]
+end_token_source = [num_words_inputs - 1]
+start_token_target = [num_words_output - 2]
+end_token_target = [num_words_output - 1]
 
-    decoded_sentence = target_tokenizer.decode([int(i) for i in output.numpy()[0] if i != 0])
-    return decoded_sentence
+# ========== Translation Functions ==========
+def predict(inp_sentence, tokenizer_in, tokenizer_out, target_max_len):
+    inp_sentence = start_token_source + tokenizer_in.encode(inp_sentence) + end_token_source
+    enc_input = tf.expand_dims(inp_sentence, axis=0)
 
-# ========== STREAMLIT UI ==========
+    out_sentence = start_token_target
+    output = tf.expand_dims(out_sentence, axis=0)
+
+    for _ in range(target_max_len):
+        predictions = model(enc_input, output, training=False)
+        prediction = predictions[:, -1:, :]
+        predicted_id = tf.cast(tf.argmax(prediction, axis=-1), tf.int32)
+
+        if predicted_id == end_token_target:
+            return tf.squeeze(output, axis=0)
+
+        output = tf.concat([output, predicted_id], axis=-1)
+
+    return tf.squeeze(output, axis=0)
+
+def translate(sentence):
+    output = predict(sentence, source_tokenizer, target_tokenizer, 15)
+    predicted_sentence = target_tokenizer.decode(
+        [i for i in output if i < start_token_target[0]]
+    )
+    return predicted_sentence
+
+# ========== Streamlit App UI ==========
 st.title("🌐➡️📝 TarjumanAI")
 st.markdown("##### Translate Arabic to English Seamlessly")
 
-# Load everything
-source_tokenizer, target_tokenizer = load_tokenizers()
-model = load_model()
+user_input = st.text_area("📝 Enter Arabic Text Below", height=150)
 
-if model:
-    st.success("✅ Model loaded successfully!")
-else:
-    st.error("❌ Failed to load the model.")
-
-# Input Area
-st.subheader("📝 Enter Arabic Text:")
-arabic_input = st.text_area("", height=200, placeholder="اكتب النص هنا... (Write Arabic text here)")
-
-# Translate Button
 if st.button("✨ Translate to English", use_container_width=True):
-    if not arabic_input.strip():
-        st.warning("⚠️ Please enter Arabic text to translate!")
+    if not user_input.strip():
+        st.warning("⚠️ Please enter Arabic text first!")
     else:
         with st.spinner("Translating..."):
-            translation = evaluate(arabic_input, model, source_tokenizer, target_tokenizer)
+            translation = translate(user_input)
             st.subheader("💬 Translated English Text:")
             st.code(translation, language=None)
 
