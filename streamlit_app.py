@@ -319,8 +319,8 @@ class Transformer(tf.keras.Model):
 
 # Load Tokenizers
 def load_tokenizer(filename):
-    # Get the current file's directory
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+    import tensorflow_datasets as tfds
+    current_dir = os.getcwd()  # Streamlit runs from the root folder
     tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file(
         os.path.join(current_dir, filename)
     )
